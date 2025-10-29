@@ -1,0 +1,35 @@
+services:
+  # Backend Service (Go + WebSocket)
+  - type: web
+    name: four-in-a-row-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: DATABASE_URL
+        sync: false
+      - key: KAFKA_BROKER
+        sync: false
+
+  # Frontend Service (React + Nginx)
+  - type: web
+    name: four-in-a-row-frontend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./frontend/Dockerfile
+    dockerContext: ./frontend
+    envVars:
+      - key: REACT_APP_API_URL
+        sync: false
+      - key: REACT_APP_WS_URL
+        sync: false
+
+databases:
+  - name: four-in-a-row-db
+    databaseName: four_in_a_row
+    user: postgres
+    plan: free

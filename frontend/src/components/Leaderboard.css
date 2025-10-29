@@ -1,0 +1,126 @@
+.leaderboard-container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.leaderboard-container h1 {
+  text-align: center;
+  font-size: 48px;
+  margin-bottom: 30px;
+}
+
+.leaderboard-table {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border-radius: 15px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.table-header,
+.table-row {
+  display: grid;
+  grid-template-columns: 80px 1fr repeat(4, 100px);
+  align-items: center;
+  padding: 15px 20px;
+  gap: 10px;
+}
+
+.table-header {
+  background: rgba(0, 0, 0, 0.3);
+  font-weight: bold;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.table-row {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.3s;
+}
+
+.table-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.table-row:last-child {
+  border-bottom: none;
+}
+
+.rank {
+  text-align: center;
+  font-size: 24px;
+  font-weight: bold;
+}
+
+.username {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.stats {
+  text-align: center;
+  font-size: 16px;
+}
+
+.rank-1 {
+  background: linear-gradient(90deg, rgba(255, 215, 0, 0.2), transparent);
+}
+
+.rank-2 {
+  background: linear-gradient(90deg, rgba(192, 192, 192, 0.2), transparent);
+}
+
+.rank-3 {
+  background: linear-gradient(90deg, rgba(205, 127, 50, 0.2), transparent);
+}
+
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  font-size: 20px;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border-radius: 15px;
+  margin: 20px 0;
+}
+
+.refresh-btn {
+  display: block;
+  margin: 30px auto 0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 12px 30px;
+  font-size: 16px;
+  font-weight: bold;
+  border: none;
+  border-radius: 10px;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+}
+
+@media (max-width: 768px) {
+  .table-header,
+  .table-row {
+    grid-template-columns: 60px 1fr repeat(4, 70px);
+    padding: 12px 10px;
+    gap: 5px;
+    font-size: 14px;
+  }
+
+  .rank {
+    font-size: 20px;
+  }
+
+  .username {
+    font-size: 16px;
+  }
+
+  .stats {
+    font-size: 14px;
+  }
+
+  .table-header {
+    font-size: 12px;
+  }
+}

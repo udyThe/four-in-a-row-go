@@ -1,0 +1,226 @@
+.game-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.lobby {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border-radius: 20px;
+  padding: 40px;
+  text-align: center;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  min-width: 400px;
+}
+
+.lobby h1 {
+  font-size: 48px;
+  margin-bottom: 10px;
+}
+
+.subtitle {
+  font-size: 18px;
+  margin-bottom: 30px;
+  opacity: 0.9;
+}
+
+.lobby form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.lobby input {
+  padding: 15px;
+  font-size: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border-radius: 10px;
+  text-align: center;
+}
+
+.lobby input::placeholder {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.lobby button {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 15px 30px;
+  font-size: 18px;
+  font-weight: bold;
+  border: none;
+  border-radius: 10px;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+}
+
+.waiting {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border-radius: 20px;
+  padding: 60px;
+  text-align: center;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.waiting h2 {
+  margin-bottom: 20px;
+}
+
+.spinner {
+  width: 50px;
+  height: 50px;
+  border: 5px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 30px auto;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.players-info {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin: 20px 0;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  padding: 20px 40px;
+  border-radius: 15px;
+}
+
+.player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: bold;
+}
+
+.player-disc {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+}
+
+.player1 .player-disc {
+  background: #ff4444;
+}
+
+.player2 .player-disc {
+  background: #ffdd44;
+}
+
+.vs {
+  font-size: 24px;
+  font-weight: bold;
+  opacity: 0.7;
+}
+
+.bot-badge {
+  font-size: 16px;
+  margin-left: 5px;
+}
+
+.turn-info {
+  font-size: 24px;
+  font-weight: bold;
+  padding: 15px 30px;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border-radius: 10px;
+  margin: 10px 0;
+  transition: all 0.3s;
+}
+
+.turn-info.my-turn {
+  background: rgba(255, 200, 0, 0.3);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+.message {
+  font-size: 28px;
+  font-weight: bold;
+  padding: 20px 40px;
+  background: rgba(76, 175, 80, 0.3);
+  backdrop-filter: blur(10px);
+  border-radius: 10px;
+  margin: 20px 0;
+  animation: slideIn 0.3s ease-out;
+}
+
+.error {
+  font-size: 18px;
+  padding: 15px 30px;
+  background: rgba(244, 67, 54, 0.3);
+  backdrop-filter: blur(10px);
+  border-radius: 10px;
+  margin: 20px 0;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.game-over {
+  margin-top: 30px;
+}
+
+.play-again-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 15px 40px;
+  font-size: 20px;
+  font-weight: bold;
+  border: none;
+  border-radius: 10px;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+}
+
+@media (max-width: 768px) {
+  .lobby {
+    min-width: auto;
+    width: 90%;
+    padding: 30px 20px;
+  }
+
+  .lobby h1 {
+    font-size: 36px;
+  }
+
+  .players-info {
+    flex-direction: column;
+    gap: 10px;
+    padding: 15px 20px;
+  }
+
+  .vs {
+    transform: rotate(90deg);
+  }
+}

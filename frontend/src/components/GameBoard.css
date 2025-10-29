@@ -1,0 +1,146 @@
+.game-board {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  margin: 20px 0;
+}
+
+.columns {
+  display: flex;
+  gap: 10px;
+  margin-bottom: -5px;
+  position: relative;
+  z-index: 10;
+}
+
+.column {
+  width: 60px;
+  height: 60px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  transition: all 0.3s;
+  position: relative;
+  background: rgba(44, 90, 160, 0.4);
+  border-radius: 10px;
+  border: 2px solid rgba(44, 90, 160, 0.6);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.column:hover:not(.disabled) {
+  background: rgba(44, 90, 160, 0.7);
+  border-color: rgba(44, 90, 160, 0.9);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.column.disabled {
+  cursor: not-allowed;
+  opacity: 0.3;
+  background: rgba(100, 100, 100, 0.2);
+  border-color: rgba(100, 100, 100, 0.3);
+}
+
+.column-hover {
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+
+.column:hover:not(.disabled) .column-hover {
+  opacity: 0.9;
+}
+
+.board {
+  background: #2c5aa0;
+  padding: 15px;
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  position: relative;
+  z-index: 1;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.row:last-child {
+  margin-bottom: 0;
+}
+
+.cell {
+  width: 60px;
+  height: 60px;
+  background: white;
+  border-radius: 50%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.cell.empty {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.cell.player1 {
+  background: #ff4444;
+}
+
+.cell.player2 {
+  background: #ffdd44;
+}
+
+.disc {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  animation: dropDisc 0.3s ease-out;
+}
+
+.player1 .disc {
+  background: #ff4444;
+  box-shadow: 0 2px 5px rgba(255, 0, 0, 0.5);
+}
+
+.player2 .disc {
+  background: #ffdd44;
+  box-shadow: 0 2px 5px rgba(255, 200, 0, 0.5);
+}
+
+@keyframes dropDisc {
+  0% {
+    transform: translateY(-400px);
+  }
+  60% {
+    transform: translateY(10px);
+  }
+  80% {
+    transform: translateY(-5px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 768px) {
+  .column, .cell {
+    width: 45px;
+    height: 45px;
+  }
+  
+  .disc {
+    width: 38px;
+    height: 38px;
+  }
+  
+  .column {
+    width: 45px;
+    height: 45px;
+  }
+}
