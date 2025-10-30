@@ -13,11 +13,11 @@ function Analytics() {
     const interval = setInterval(fetchAnalytics, 30000); // Refresh every 30 seconds
     return () => clearInterval(interval);
   }, [view]);
-
   const fetchAnalytics = async () => {
     try {
       setLoading(true);
-      const apiUrl = process.env.REACT_APP_API_URL || 'http://13.204.212.197:8080/api';
+      // const apiUrl = process.env.REACT_APP_API_URL || 'http://13.204.212.197:8080/api';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8080/api';
       
       if (view === 'hourly') {
         const response = await fetch(`${apiUrl}/analytics/hourly?hours=24`);
