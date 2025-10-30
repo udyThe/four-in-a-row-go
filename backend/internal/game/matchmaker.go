@@ -48,6 +48,7 @@ func (mm *Matchmaker) AddPlayer(username string) (*Player, *Game, bool) {
 	player := &Player{
 		ID:            uuid.New().String(),
 		Username:      username,
+		SessionToken:  uuid.New().String(),
 		IsBot:         false,
 		Connected:     true,
 		LastHeartbeat: time.Now(),

@@ -15,6 +15,7 @@ import (
 type Manager struct {
 	games         map[string]*Game
 	playerGames   map[string]string // playerID -> gameID
+	sessionGames  map[string]string // sessionToken -> gameID
 	mu            sync.RWMutex
 	db            *database.DB
 	kafkaProducer *kafka.Producer
@@ -25,12 +26,16 @@ func NewManager(db *database.DB, kafkaProducer *kafka.Producer) *Manager {
 	m := &Manager{
 		games:         make(map[string]*Game),
 		playerGames:   make(map[string]string),
+		sessionGames:  make(map[string]string),
 		db:            db,
 		kafkaProducer: kafkaProducer,
 	}
 
 	// Start cleanup goroutine
 	go m.cleanupDisconnectedGames()
+
+	// Start turn timer monitoring
+	go m.monitorTurnTimers()
 
 	return m
 }
@@ -51,8 +56,11 @@ func (m *Manager) CreateGame(player1 *Player) *Game {
 	game := NewGame(player1)
 	m.games[game.ID] = game
 	m.playerGames[player1.ID] = game.ID
+	if player1.SessionToken != "" {
+		m.sessionGames[player1.SessionToken] = game.ID
+	}
 
-	log.Printf("Game created: %s for player %s", game.ID, player1.Username)
+	log.Printf("Game created: %s for player %s (session: %s)", game.ID, player1.Username, player1.SessionToken)
 
 	return game
 }
@@ -72,8 +80,11 @@ func (m *Manager) JoinGame(gameID string, player2 *Player) error {
 
 	game.AddPlayer2(player2)
 	m.playerGames[player2.ID] = gameID
+	if player2.SessionToken != "" {
+		m.sessionGames[player2.SessionToken] = gameID
+	}
 
-	log.Printf("Player %s joined game %s", player2.Username, gameID)
+	log.Printf("Player %s joined game %s (session: %s)", player2.Username, gameID, player2.SessionToken)
 
 	// Capture state needed for Kafka event before releasing lock
 	activeGames := len(m.games)
@@ -94,6 +105,62 @@ func (m *Manager) JoinGame(gameID string, player2 *Player) error {
 	}
 
 	return nil
+}
+
+// ReconnectPlayer reconnects a player to their game using session token
+func (m *Manager) ReconnectPlayer(sessionToken string) (*Game, *Player, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Find game by session token
+	gameID, exists := m.sessionGames[sessionToken]
+	if !exists {
+		return nil, nil, errors.New("session not found or expired")
+	}
+
+	game, exists := m.games[gameID]
+	if !exists {
+		// Clean up stale session
+		delete(m.sessionGames, sessionToken)
+		return nil, nil, errors.New("game no longer exists")
+	}
+
+	// Find player in game
+	var player *Player
+	if game.Player1.SessionToken == sessionToken {
+		player = game.Player1
+	} else if game.Player2 != nil && game.Player2.SessionToken == sessionToken {
+		player = game.Player2
+	}
+
+	if player == nil {
+		return nil, nil, errors.New("player not found in game")
+	}
+
+	// Check if reconnect window is still open (30 seconds)
+	if player.DisconnectedAt != nil {
+		elapsed := time.Since(*player.DisconnectedAt)
+		if elapsed > 30*time.Second {
+			log.Printf("Reconnect window expired for player %s (elapsed: %v)", player.Username, elapsed)
+			return nil, nil, errors.New("reconnect window expired (>30 seconds)")
+		}
+	}
+
+	// Reconnect player
+	player.Connected = true
+	player.LastHeartbeat = time.Now()
+	player.DisconnectedAt = nil
+
+	log.Printf("Player %s reconnected to game %s (was disconnected for %v)",
+		player.Username, gameID,
+		func() time.Duration {
+			if player.DisconnectedAt != nil {
+				return time.Since(*player.DisconnectedAt)
+			}
+			return 0
+		}())
+
+	return game, player, nil
 }
 
 // GetGame retrieves a game by ID
@@ -199,15 +266,15 @@ func (m *Manager) SetPlayerDisconnected(playerID string) {
 	log.Printf("Player %s disconnected from game %s", playerID, game.ID)
 }
 
-// ReconnectPlayer reconnects a player to their game
-func (m *Manager) ReconnectPlayer(playerID string) (*Game, error) {
+// ReconnectPlayerByID reconnects a player to their game by playerID (legacy method)
+func (m *Manager) ReconnectPlayerByID(playerID string) (*Game, error) {
 	game, err := m.GetGameByPlayer(playerID)
 	if err != nil {
 		return nil, err
 	}
 
 	game.UpdateHeartbeat(playerID)
-	log.Printf("Player %s reconnected to game %s", playerID, game.ID)
+	log.Printf("Player %s reconnected to game %s by playerID", playerID, game.ID)
 
 	return game, nil
 }
@@ -249,6 +316,64 @@ func (m *Manager) cleanupDisconnectedGames() {
 	}
 }
 
+// monitorTurnTimers checks for turn timeouts (30s per turn, 60s inactivity forfeits)
+func (m *Manager) monitorTurnTimers() {
+	ticker := time.NewTicker(2 * time.Second) // Check every 2 seconds for responsiveness
+	defer ticker.Stop()
+
+	for range ticker.C {
+		m.mu.RLock()
+		now := time.Now()
+		gamesToUpdate := make(map[string]*Game)
+
+		for gameID, game := range m.games {
+			if game.Status != StatusInProgress {
+				continue
+			}
+
+			// Check for turn timeout (30 seconds)
+			turnElapsed := now.Sub(game.TurnStartedAt)
+			if turnElapsed > time.Duration(game.TurnTimeoutSec)*time.Second {
+				// Skip turn if no move in 30 seconds
+				gamesToUpdate[gameID] = game
+				log.Printf("Turn timeout in game %s, skipping turn (elapsed: %v)", gameID, turnElapsed)
+			}
+
+			// Check for total inactivity timeout (60 seconds = forfeit)
+			inactivityElapsed := now.Sub(game.LastMoveAt)
+			if inactivityElapsed > 60*time.Second {
+				// Forfeit game due to inactivity
+				var inactivePlayerID string
+				if game.CurrentTurn == Player1 {
+					inactivePlayerID = game.Player1.ID
+				} else if game.Player2 != nil {
+					inactivePlayerID = game.Player2.ID
+				}
+
+				if inactivePlayerID != "" {
+					log.Printf("Inactivity timeout in game %s, forfeiting game (elapsed: %v)", gameID, inactivityElapsed)
+					// Will handle forfeit after releasing read lock
+					game.AbandonGame(inactivePlayerID)
+					m.handleGameFinished(game)
+				}
+			}
+		}
+
+		m.mu.RUnlock()
+
+		// Skip turns outside of read lock to allow game updates
+		for gameID, game := range gamesToUpdate {
+			game.SkipTurn()
+			log.Printf("Turn skipped for game %s", gameID)
+
+			// Trigger game update callback to notify clients
+			if m.onGameUpdate != nil {
+				go m.onGameUpdate(gameID)
+			}
+		}
+	}
+}
+
 // handleGameFinished processes a finished game
 func (m *Manager) handleGameFinished(game *Game) {
 	log.Printf("Game %s finished: %s", game.ID, game.Result)
@@ -278,13 +403,22 @@ func (m *Manager) removeGame(gameID string) {
 		return
 	}
 
+	// Clean up player mappings
 	delete(m.playerGames, game.Player1.ID)
+	if game.Player1.SessionToken != "" {
+		delete(m.sessionGames, game.Player1.SessionToken)
+	}
+
 	if game.Player2 != nil {
 		delete(m.playerGames, game.Player2.ID)
+		if game.Player2.SessionToken != "" {
+			delete(m.sessionGames, game.Player2.SessionToken)
+		}
 	}
+
 	delete(m.games, gameID)
 
-	log.Printf("Game %s removed from memory", gameID)
+	log.Printf("Game %s removed from memory (cleaned up session tokens)", gameID)
 }
 
 // saveGameToDB saves a completed game to the database

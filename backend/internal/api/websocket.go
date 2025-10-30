@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -202,11 +203,12 @@ func (client *WSClient) handleJoin(payload json.RawMessage) {
 		}
 	}
 
-	// Send player info
+	// Send player info including session token for reconnect
 	client.sendMessage("player_info", map[string]interface{}{
-		"player_id": player.ID,
-		"game_id":   gameObj.ID,
-		"username":  player.Username,
+		"player_id":     player.ID,
+		"game_id":       gameObj.ID,
+		"username":      player.Username,
+		"session_token": player.SessionToken,
 	})
 
 	// Always broadcast current game state to ensure all connected clients get the update
@@ -283,8 +285,7 @@ func (client *WSClient) handleMove(payload json.RawMessage) {
 
 func (client *WSClient) handleReconnect(payload json.RawMessage) {
 	var data struct {
-		PlayerID string `json:"player_id"`
-		GameID   string `json:"game_id"`
+		SessionToken string `json:"session_token"`
 	}
 
 	if err := json.Unmarshal(payload, &data); err != nil {
@@ -292,30 +293,31 @@ func (client *WSClient) handleReconnect(payload json.RawMessage) {
 		return
 	}
 
-	// Try to reconnect to the game
-	gameObj, err := client.server.gameManager.GetGame(data.GameID)
+	if data.SessionToken == "" {
+		client.sendError("Session token is required")
+		return
+	}
+
+	// Try to reconnect using session token
+	gameObj, player, err := client.server.gameManager.ReconnectPlayer(data.SessionToken)
 	if err != nil {
-		client.sendError("Game not found")
+		log.Printf("Reconnect failed for session %s: %v", data.SessionToken, err)
+		client.sendError(fmt.Sprintf("Reconnect failed: %v", err))
 		return
 	}
 
-	// Verify player belongs to this game
-	if gameObj.Player1.ID != data.PlayerID &&
-		(gameObj.Player2 == nil || gameObj.Player2.ID != data.PlayerID) {
-		client.sendError("Player not in this game")
-		return
-	}
+	// Set client identifiers
+	client.playerID = player.ID
+	client.gameID = gameObj.ID
 
-	client.playerID = data.PlayerID
-	client.gameID = data.GameID
+	log.Printf("Client reconnected: player=%s game=%s session=%s", player.Username, gameObj.ID, data.SessionToken)
 
-	// Update heartbeat
-	gameObj.UpdateHeartbeat(data.PlayerID)
-
-	// Send reconnection success
+	// Send reconnection success with full player info
 	client.sendMessage("reconnected", map[string]interface{}{
-		"game_id":   gameObj.ID,
-		"player_id": data.PlayerID,
+		"game_id":       gameObj.ID,
+		"player_id":     player.ID,
+		"username":      player.Username,
+		"session_token": player.SessionToken,
 	})
 
 	// Send current game state

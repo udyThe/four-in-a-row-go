@@ -2,6 +2,7 @@ package game
 
 import (
 	"encoding/json"
+	"log"
 	"sync"
 	"time"
 
@@ -27,40 +28,46 @@ const (
 )
 
 type Player struct {
-	ID            string    `json:"id"`
-	Username      string    `json:"username"`
-	IsBot         bool      `json:"is_bot"`
-	Connected     bool      `json:"connected"`
-	LastHeartbeat time.Time `json:"-"`
+	ID             string     `json:"id"`
+	Username       string     `json:"username"`
+	SessionToken   string     `json:"session_token"`
+	IsBot          bool       `json:"is_bot"`
+	Connected      bool       `json:"connected"`
+	LastHeartbeat  time.Time  `json:"-"`
+	DisconnectedAt *time.Time `json:"-"`
 }
 
 type Game struct {
-	ID            string     `json:"id"`
-	Player1       *Player    `json:"player1"`
-	Player2       *Player    `json:"player2"`
-	Board         *Board     `json:"board"`
-	CurrentTurn   CellState  `json:"current_turn"`
-	Status        GameStatus `json:"status"`
-	Winner        *Player    `json:"winner,omitempty"`
-	Result        GameResult `json:"result,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	StartedAt     *time.Time `json:"started_at,omitempty"`
-	FinishedAt    *time.Time `json:"finished_at,omitempty"`
-	LastMoveAt    time.Time  `json:"last_move_at"`
-	Bot           *Bot       `json:"-"`
-	mu            sync.RWMutex
+	ID             string     `json:"id"`
+	Player1        *Player    `json:"player1"`
+	Player2        *Player    `json:"player2"`
+	Board          *Board     `json:"board"`
+	CurrentTurn    CellState  `json:"current_turn"`
+	Status         GameStatus `json:"status"`
+	Winner         *Player    `json:"winner,omitempty"`
+	Result         GameResult `json:"result,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	FinishedAt     *time.Time `json:"finished_at,omitempty"`
+	LastMoveAt     time.Time  `json:"last_move_at"`
+	TurnStartedAt  time.Time  `json:"turn_started_at"`
+	TurnTimeoutSec int        `json:"turn_timeout_sec"`
+	Bot            *Bot       `json:"-"`
+	mu             sync.RWMutex
 }
 
 func NewGame(player1 *Player) *Game {
 	now := time.Now()
 	return &Game{
-		ID:          uuid.New().String(),
-		Player1:     player1,
-		Board:       NewBoard(),
-		CurrentTurn: Player1,
-		Status:      StatusWaiting,
-		CreatedAt:   now,
-		LastMoveAt:  now,
+		ID:             uuid.New().String(),
+		Player1:        player1,
+		Board:          NewBoard(),
+		CurrentTurn:    Player1,
+		Status:         StatusWaiting,
+		CreatedAt:      now,
+		LastMoveAt:     now,
+		TurnStartedAt:  now,
+		TurnTimeoutSec: 30, // 30 seconds per turn
 	}
 }
 
@@ -73,6 +80,7 @@ func (g *Game) AddPlayer2(player2 *Player) {
 	now := time.Now()
 	g.StartedAt = &now
 	g.Status = StatusInProgress
+	g.TurnStartedAt = now // Start timer for first turn
 
 	// Initialize bot if player2 is a bot
 	if player2.IsBot {
@@ -110,7 +118,8 @@ func (g *Game) MakeMove(playerID string, column int) (int, error) {
 		return -1, err
 	}
 
-	g.LastMoveAt = time.Now()
+	now := time.Now()
+	g.LastMoveAt = now
 
 	// Check for win
 	if g.Board.CheckWin(currentPlayer) {
@@ -124,12 +133,13 @@ func (g *Game) MakeMove(playerID string, column int) (int, error) {
 		return row, nil
 	}
 
-	// Switch turn
+	// Switch turn and reset turn timer
 	if g.CurrentTurn == Player1 {
 		g.CurrentTurn = Player2
 	} else {
 		g.CurrentTurn = Player1
 	}
+	g.TurnStartedAt = now // Reset turn timer for next player
 
 	return row, nil
 }
@@ -144,6 +154,29 @@ func (g *Game) GetBotMove() int {
 	}
 
 	return g.Bot.GetBestMove(g.Board)
+}
+
+// SkipTurn skips the current player's turn due to timeout
+func (g *Game) SkipTurn() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.Status != StatusInProgress {
+		return
+	}
+
+	now := time.Now()
+	g.LastMoveAt = now
+
+	// Switch turn without making a move
+	if g.CurrentTurn == Player1 {
+		g.CurrentTurn = Player2
+	} else {
+		g.CurrentTurn = Player1
+	}
+	g.TurnStartedAt = now // Reset turn timer for next player
+
+	log.Printf("Turn skipped for game %s, now %v's turn", g.ID, g.CurrentTurn)
 }
 
 // finishGame marks the game as finished with a winner
@@ -234,10 +267,13 @@ func (g *Game) SetPlayerDisconnected(playerID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	now := time.Now()
 	if g.Player1.ID == playerID {
 		g.Player1.Connected = false
+		g.Player1.DisconnectedAt = &now
 	} else if g.Player2 != nil && g.Player2.ID == playerID {
 		g.Player2.Connected = false
+		g.Player2.DisconnectedAt = &now
 	}
 }
 
@@ -247,31 +283,37 @@ func (g *Game) ToJSON() ([]byte, error) {
 	defer g.mu.RUnlock()
 
 	type GameJSON struct {
-		ID          string     `json:"id"`
-		Player1     *Player    `json:"player1"`
-		Player2     *Player    `json:"player2"`
-		Board       [][]int    `json:"board"`
-		CurrentTurn int        `json:"current_turn"`
-		Status      GameStatus `json:"status"`
-		Winner      *Player    `json:"winner,omitempty"`
-		Result      GameResult `json:"result,omitempty"`
-		CreatedAt   time.Time  `json:"created_at"`
-		StartedAt   *time.Time `json:"started_at,omitempty"`
-		FinishedAt  *time.Time `json:"finished_at,omitempty"`
+		ID             string     `json:"id"`
+		Player1        *Player    `json:"player1"`
+		Player2        *Player    `json:"player2"`
+		Board          [][]int    `json:"board"`
+		CurrentTurn    int        `json:"current_turn"`
+		Status         GameStatus `json:"status"`
+		Winner         *Player    `json:"winner,omitempty"`
+		Result         GameResult `json:"result,omitempty"`
+		CreatedAt      time.Time  `json:"created_at"`
+		StartedAt      *time.Time `json:"started_at,omitempty"`
+		FinishedAt     *time.Time `json:"finished_at,omitempty"`
+		LastMoveAt     time.Time  `json:"last_move_at"`
+		TurnStartedAt  time.Time  `json:"turn_started_at"`
+		TurnTimeoutSec int        `json:"turn_timeout_sec"`
 	}
 
 	gameJSON := GameJSON{
-		ID:          g.ID,
-		Player1:     g.Player1,
-		Player2:     g.Player2,
-		Board:       g.Board.ToArray(),
-		CurrentTurn: int(g.CurrentTurn),
-		Status:      g.Status,
-		Winner:      g.Winner,
-		Result:      g.Result,
-		CreatedAt:   g.CreatedAt,
-		StartedAt:   g.StartedAt,
-		FinishedAt:  g.FinishedAt,
+		ID:             g.ID,
+		Player1:        g.Player1,
+		Player2:        g.Player2,
+		Board:          g.Board.ToArray(),
+		CurrentTurn:    int(g.CurrentTurn),
+		Status:         g.Status,
+		Winner:         g.Winner,
+		Result:         g.Result,
+		CreatedAt:      g.CreatedAt,
+		StartedAt:      g.StartedAt,
+		FinishedAt:     g.FinishedAt,
+		LastMoveAt:     g.LastMoveAt,
+		TurnStartedAt:  g.TurnStartedAt,
+		TurnTimeoutSec: g.TurnTimeoutSec,
 	}
 
 	return json.Marshal(gameJSON)
