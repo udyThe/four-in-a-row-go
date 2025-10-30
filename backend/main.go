@@ -51,12 +51,17 @@ func main() {
 	// Initialize game manager
 	gameManager := game.NewManager(db, kafkaProducer)
 
-	// Initialize matchmaking
-	matchmaker := game.NewMatchmaker(gameManager)
-	go matchmaker.Run()
+	// Start metrics emitter (sends system metrics to Kafka every 60 seconds)
+	gameManager.StartMetricsEmitter()
 
-	// Initialize API server
+	// Initialize matchmaking (do NOT start it yet)
+	matchmaker := game.NewMatchmaker(gameManager)
+
+	// Initialize API server (this registers callbacks the matchmaker relies on)
 	server := api.NewServer(cfg, gameManager, matchmaker, db)
+
+	// Now start the matchmaker loop after server (and callbacks) are ready
+	go matchmaker.Run()
 
 	// Start HTTP server
 	srv := &http.Server{

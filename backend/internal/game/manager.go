@@ -18,6 +18,7 @@ type Manager struct {
 	mu            sync.RWMutex
 	db            *database.DB
 	kafkaProducer *kafka.Producer
+	onGameUpdate  func(gameID string) // Callback when game state changes
 }
 
 func NewManager(db *database.DB, kafkaProducer *kafka.Producer) *Manager {
@@ -32,6 +33,14 @@ func NewManager(db *database.DB, kafkaProducer *kafka.Producer) *Manager {
 	go m.cleanupDisconnectedGames()
 
 	return m
+}
+
+// SetGameUpdateCallback sets a callback function to be called when game state changes
+func (m *Manager) SetGameUpdateCallback(callback func(gameID string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onGameUpdate = callback
+	log.Printf("SetGameUpdateCallback: callback registered successfully (callback is nil: %v)", callback == nil)
 }
 
 // CreateGame creates a new game with player1
@@ -50,11 +59,14 @@ func (m *Manager) CreateGame(player1 *Player) *Game {
 
 // JoinGame adds player2 to an existing game
 func (m *Manager) JoinGame(gameID string, player2 *Player) error {
+	// Acquire lock, capture state, then release before callbacks
 	m.mu.Lock()
-	defer m.mu.Unlock()
+
+	log.Printf("JoinGame called: gameID=%s player2=%s callback_is_nil=%v", gameID, player2.Username, m.onGameUpdate == nil)
 
 	game, exists := m.games[gameID]
 	if !exists {
+		m.mu.Unlock()
 		return ErrGameNotFound
 	}
 
@@ -63,8 +75,23 @@ func (m *Manager) JoinGame(gameID string, player2 *Player) error {
 
 	log.Printf("Player %s joined game %s", player2.Username, gameID)
 
-	// Emit game started event
-	m.emitGameStartedEvent(game)
+	// Capture state needed for Kafka event before releasing lock
+	activeGames := len(m.games)
+	totalPlayers := len(m.playerGames)
+
+	// Release lock before emitting events or calling callbacks to avoid deadlock
+	m.mu.Unlock()
+
+	// Emit game started event (uses captured state, no locking)
+	m.emitGameStartedEventWithState(game, activeGames, totalPlayers)
+
+	// Notify websocket layer that game state changed
+	if m.onGameUpdate != nil {
+		log.Printf("Triggering game update callback for game %s", gameID)
+		go m.onGameUpdate(gameID)
+	} else {
+		log.Printf("WARNING: onGameUpdate callback is nil for game %s", gameID)
+	}
 
 	return nil
 }
@@ -286,14 +313,14 @@ func (m *Manager) saveGameToDB(game *Game) error {
 	}
 
 	return m.db.SaveGame(ctx, &database.GameRecord{
-		ID:          game.ID,
-		Player1:     game.Player1.Username,
-		Player2:     player2Username,
-		Winner:      winner,
-		Result:      string(game.Result),
-		BoardState:  game.Board.ToArray(),
-		StartedAt:   game.StartedAt,
-		FinishedAt:  game.FinishedAt,
+		ID:         game.ID,
+		Player1:    game.Player1.Username,
+		Player2:    player2Username,
+		Winner:     winner,
+		Result:     string(game.Result),
+		BoardState: game.Board.ToArray(),
+		StartedAt:  game.StartedAt,
+		FinishedAt: game.FinishedAt,
 	})
 }
 
@@ -303,12 +330,32 @@ func (m *Manager) emitGameStartedEvent(game *Game) {
 		return
 	}
 
+	m.mu.RLock()
+	activeGames := len(m.games)
+	totalPlayers := len(m.playerGames)
+	m.mu.RUnlock()
+
+	m.emitGameStartedEventWithState(game, activeGames, totalPlayers)
+}
+
+func (m *Manager) emitGameStartedEventWithState(game *Game, activeGames, totalPlayers int) {
+	if m.kafkaProducer == nil {
+		return
+	}
+
 	event := map[string]interface{}{
-		"event_type": "game_started",
-		"game_id":    game.ID,
-		"player1":    game.Player1.Username,
-		"player2":    game.Player2.Username,
-		"timestamp":  time.Now().Unix(),
+		"event_type":    "game_started",
+		"game_id":       game.ID,
+		"player1":       game.Player1.Username,
+		"player2":       game.Player2.Username,
+		"timestamp":     time.Now().Unix(),
+		"timestamp_iso": time.Now().Format(time.RFC3339),
+		"hour_of_day":   time.Now().Hour(),
+		"day_of_week":   time.Now().Weekday().String(),
+		// Kafka metrics visible in UI
+		"active_games":  activeGames,
+		"total_players": totalPlayers,
+		"is_bot_game":   game.Player2.Username == "Bot",
 	}
 
 	data, _ := json.Marshal(event)
@@ -321,19 +368,36 @@ func (m *Manager) emitMoveEvent(game *Game, playerID string, column, row int) {
 	}
 
 	username := ""
+	isBot := false
 	if game.Player1.ID == playerID {
 		username = game.Player1.Username
 	} else if game.Player2 != nil {
 		username = game.Player2.Username
+		isBot = game.Player2.Username == "Bot"
+	}
+
+	// Count total moves in game
+	totalMoves := 0
+	for _, col := range game.Board.Grid {
+		for _, cell := range col {
+			if cell != 0 {
+				totalMoves++
+			}
+		}
 	}
 
 	event := map[string]interface{}{
-		"event_type": "move_made",
-		"game_id":    game.ID,
-		"player":     username,
-		"column":     column,
-		"row":        row,
-		"timestamp":  time.Now().Unix(),
+		"event_type":    "move_made",
+		"game_id":       game.ID,
+		"player":        username,
+		"column":        column,
+		"row":           row,
+		"timestamp":     time.Now().Unix(),
+		"timestamp_iso": time.Now().Format(time.RFC3339),
+		"hour_of_day":   time.Now().Hour(),
+		// Kafka metrics
+		"move_number": totalMoves,
+		"is_bot_move": isBot,
 	}
 
 	data, _ := json.Marshal(event)
@@ -355,15 +419,39 @@ func (m *Manager) emitGameFinishedEvent(game *Game) {
 		winner = game.Winner.Username
 	}
 
+	// Count total moves in game
+	totalMoves := 0
+	for _, col := range game.Board.Grid {
+		for _, cell := range col {
+			if cell != 0 {
+				totalMoves++
+			}
+		}
+	}
+
+	m.mu.RLock()
+	activeGames := len(m.games)
+	totalPlayers := len(m.playerGames)
+	m.mu.RUnlock()
+
 	event := map[string]interface{}{
-		"event_type": "game_finished",
-		"game_id":    game.ID,
-		"player1":    game.Player1.Username,
-		"player2":    game.Player2.Username,
-		"winner":     winner,
-		"result":     string(game.Result),
-		"duration":   duration,
-		"timestamp":  time.Now().Unix(),
+		"event_type":    "game_finished",
+		"game_id":       game.ID,
+		"player1":       game.Player1.Username,
+		"player2":       game.Player2.Username,
+		"winner":        winner,
+		"result":        string(game.Result),
+		"duration":      duration,
+		"timestamp":     time.Now().Unix(),
+		"timestamp_iso": time.Now().Format(time.RFC3339),
+		"hour_of_day":   time.Now().Hour(),
+		"day_of_week":   time.Now().Weekday().String(),
+		// Kafka metrics visible in UI
+		"total_moves":       totalMoves,
+		"active_games":      activeGames,
+		"total_players":     totalPlayers,
+		"game_duration_sec": int(duration),
+		"was_bot_game":      game.Player2.Username == "Bot",
 	}
 
 	data, _ := json.Marshal(event)

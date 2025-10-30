@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import Game from './components/Game';
 import Leaderboard from './components/Leaderboard';
+import Analytics from './components/Analytics';
 import './App.css';
 
 function App() {
@@ -12,12 +13,14 @@ function App() {
           <div className="nav-content">
             <Link to="/" className="nav-link">Play</Link>
             <Link to="/leaderboard" className="nav-link">Leaderboard</Link>
+            <Link to="/analytics" className="nav-link">Analytics</Link>
           </div>
         </nav>
 
         <Routes>
           <Route path="/" element={<Game />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
+          <Route path="/analytics" element={<Analytics />} />
         </Routes>
 
         <footer className="footer">

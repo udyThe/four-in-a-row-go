@@ -8,8 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	kafka "github.com/segmentio/kafka-go"
 	"github.com/jackc/pgx/v5/pgxpool"
+	kafka "github.com/segmentio/kafka-go"
 )
 
 type GameEvent struct {
@@ -122,6 +122,12 @@ func (s *AnalyticsService) recordGameStarted(ctx context.Context, event *GameEve
 		ON CONFLICT (game_id) DO NOTHING
 	`
 	_, err := s.db.Exec(ctx, query, event.GameID, event.Player1, event.Player2, event.Timestamp)
+
+	if err == nil {
+		s.updateHourlyStats(ctx, event.Timestamp, "game_started")
+		s.updateDailyStats(ctx, event.Timestamp, "game_started")
+	}
+
 	return err
 }
 
@@ -131,6 +137,12 @@ func (s *AnalyticsService) recordMove(ctx context.Context, event *GameEvent) err
 		VALUES ($1, $2, $3, $4, to_timestamp($5))
 	`
 	_, err := s.db.Exec(ctx, query, event.GameID, event.Player, event.Column, event.Row, event.Timestamp)
+
+	if err == nil {
+		s.updateHourlyStats(ctx, event.Timestamp, "move_made")
+		s.updateDailyStats(ctx, event.Timestamp, "move_made")
+	}
+
 	return err
 }
 
@@ -141,11 +153,11 @@ func (s *AnalyticsService) recordGameFinished(ctx context.Context, event *GameEv
 		WHERE game_id = $5
 	`
 	_, err := s.db.Exec(ctx, query, event.Winner, event.Result, event.Duration, event.Timestamp, event.GameID)
-	
+
 	// Update player statistics
 	if err == nil && event.Winner != "" {
 		s.updatePlayerAnalytics(ctx, event.Winner, true)
-		
+
 		loser := event.Player1
 		if event.Winner == event.Player1 {
 			loser = event.Player2
@@ -153,8 +165,11 @@ func (s *AnalyticsService) recordGameFinished(ctx context.Context, event *GameEv
 		if loser != "" {
 			s.updatePlayerAnalytics(ctx, loser, false)
 		}
+
+		s.updateHourlyStats(ctx, event.Timestamp, "game_finished")
+		s.updateDailyStats(ctx, event.Timestamp, "game_finished")
 	}
-	
+
 	return err
 }
 
@@ -168,7 +183,7 @@ func (s *AnalyticsService) updatePlayerAnalytics(ctx context.Context, username s
 			games_lost = analytics_players.games_lost + $3,
 			last_played = CURRENT_TIMESTAMP
 	`
-	
+
 	gamesWon := 0
 	gamesLost := 0
 	if won {
@@ -176,7 +191,7 @@ func (s *AnalyticsService) updatePlayerAnalytics(ctx context.Context, username s
 	} else {
 		gamesLost = 1
 	}
-	
+
 	_, err := s.db.Exec(ctx, query, username, gamesWon, gamesLost)
 	return err
 }
@@ -213,9 +228,37 @@ func initAnalyticsTables(ctx context.Context, db *pgxpool.Pool) error {
 			last_played TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS analytics_hourly (
+			id SERIAL PRIMARY KEY,
+			hour_timestamp TIMESTAMP NOT NULL,
+			games_started INTEGER DEFAULT 0,
+			games_completed INTEGER DEFAULT 0,
+			total_moves INTEGER DEFAULT 0,
+			unique_players INTEGER DEFAULT 0,
+			avg_game_duration FLOAT DEFAULT 0,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(hour_timestamp)
+		)`,
+		`CREATE TABLE IF NOT EXISTS analytics_daily (
+			id SERIAL PRIMARY KEY,
+			date DATE NOT NULL,
+			games_started INTEGER DEFAULT 0,
+			games_completed INTEGER DEFAULT 0,
+			total_moves INTEGER DEFAULT 0,
+			unique_players INTEGER DEFAULT 0,
+			avg_game_duration FLOAT DEFAULT 0,
+			peak_hour INTEGER,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(date)
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_analytics_games_game_id ON analytics_games(game_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_games_started_at ON analytics_games(started_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_games_finished_at ON analytics_games(finished_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_analytics_moves_game_id ON analytics_moves(game_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_moves_time ON analytics_moves(move_time)`,
 		`CREATE INDEX IF NOT EXISTS idx_analytics_players_username ON analytics_players(username)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_hourly_timestamp ON analytics_hourly(hour_timestamp)`,
+		`CREATE INDEX IF NOT EXISTS idx_analytics_daily_date ON analytics_daily(date)`,
 	}
 
 	for _, query := range queries {
@@ -226,6 +269,38 @@ func initAnalyticsTables(ctx context.Context, db *pgxpool.Pool) error {
 
 	log.Println("Analytics tables initialized successfully")
 	return nil
+}
+
+func (s *AnalyticsService) updateHourlyStats(ctx context.Context, timestamp int64, eventType string) error {
+	query := `
+		INSERT INTO analytics_hourly (hour_timestamp, games_started, games_completed, total_moves)
+		VALUES (date_trunc('hour', to_timestamp($1)), 
+			CASE WHEN $2 = 'game_started' THEN 1 ELSE 0 END,
+			CASE WHEN $2 = 'game_finished' THEN 1 ELSE 0 END,
+			CASE WHEN $2 = 'move_made' THEN 1 ELSE 0 END)
+		ON CONFLICT (hour_timestamp) DO UPDATE SET
+			games_started = analytics_hourly.games_started + CASE WHEN $2 = 'game_started' THEN 1 ELSE 0 END,
+			games_completed = analytics_hourly.games_completed + CASE WHEN $2 = 'game_finished' THEN 1 ELSE 0 END,
+			total_moves = analytics_hourly.total_moves + CASE WHEN $2 = 'move_made' THEN 1 ELSE 0 END
+	`
+	_, err := s.db.Exec(ctx, query, timestamp, eventType)
+	return err
+}
+
+func (s *AnalyticsService) updateDailyStats(ctx context.Context, timestamp int64, eventType string) error {
+	query := `
+		INSERT INTO analytics_daily (date, games_started, games_completed, total_moves)
+		VALUES (date_trunc('day', to_timestamp($1)), 
+			CASE WHEN $2 = 'game_started' THEN 1 ELSE 0 END,
+			CASE WHEN $2 = 'game_finished' THEN 1 ELSE 0 END,
+			CASE WHEN $2 = 'move_made' THEN 1 ELSE 0 END)
+		ON CONFLICT (date) DO UPDATE SET
+			games_started = analytics_daily.games_started + CASE WHEN $2 = 'game_started' THEN 1 ELSE 0 END,
+			games_completed = analytics_daily.games_completed + CASE WHEN $2 = 'game_finished' THEN 1 ELSE 0 END,
+			total_moves = analytics_daily.total_moves + CASE WHEN $2 = 'move_made' THEN 1 ELSE 0 END
+	`
+	_, err := s.db.Exec(ctx, query, timestamp, eventType)
+	return err
 }
 
 func getEnv(key, defaultValue string) string {

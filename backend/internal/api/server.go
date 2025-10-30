@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -23,13 +24,21 @@ type Server struct {
 }
 
 func NewServer(cfg *config.Config, gameManager *game.Manager, matchmaker *game.Matchmaker, db *database.DB) *Server {
-	return &Server{
+	s := &Server{
 		config:      cfg,
 		gameManager: gameManager,
 		matchmaker:  matchmaker,
 		db:          db,
 		clients:     make(map[*WSClient]bool),
 	}
+
+	// Register callback to broadcast game updates when state changes (e.g., bot joins)
+	gameManager.SetGameUpdateCallback(func(gameID string) {
+		log.Printf("GameUpdateCallback invoked for game %s", gameID)
+		s.broadcastGameUpdate(gameID)
+	})
+
+	return s
 }
 
 func (s *Server) Router() http.Handler {
@@ -45,6 +54,8 @@ func (s *Server) Router() http.Handler {
 	api.HandleFunc("/user/{username}", s.handleUserStats).Methods("GET")
 	api.HandleFunc("/games/recent", s.handleRecentGames).Methods("GET")
 	api.HandleFunc("/games/user/{username}", s.handleUserGames).Methods("GET")
+	api.HandleFunc("/analytics/hourly", s.handleHourlyAnalytics).Methods("GET")
+	api.HandleFunc("/analytics/daily", s.handleDailyAnalytics).Methods("GET")
 
 	// CORS middleware
 	c := cors.New(cors.Options{
@@ -59,7 +70,7 @@ func (s *Server) Router() http.Handler {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"status": "healthy",
+		"status":    "healthy",
 		"timestamp": "ok",
 	})
 }
@@ -131,6 +142,40 @@ func (s *Server) handleUserGames(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, games)
 }
 
+func (s *Server) handleHourlyAnalytics(w http.ResponseWriter, r *http.Request) {
+	hours := 24
+	if hoursStr := r.URL.Query().Get("hours"); hoursStr != "" {
+		if h, err := strconv.Atoi(hoursStr); err == nil && h > 0 {
+			hours = h
+		}
+	}
+
+	analytics, err := s.db.GetHourlyAnalytics(r.Context(), hours)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to fetch hourly analytics")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, analytics)
+}
+
+func (s *Server) handleDailyAnalytics(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if daysStr := r.URL.Query().Get("days"); daysStr != "" {
+		if d, err := strconv.Atoi(daysStr); err == nil && d > 0 {
+			days = d
+		}
+	}
+
+	analytics, err := s.db.GetDailyAnalytics(r.Context(), days)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to fetch daily analytics")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, analytics)
+}
+
 func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -139,4 +184,38 @@ func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 
 func respondError(w http.ResponseWriter, status int, message string) {
 	respondJSON(w, status, map[string]string{"error": message})
+}
+
+// broadcastGameUpdate sends game state update to all connected clients in a game
+func (s *Server) broadcastGameUpdate(gameID string) {
+	log.Printf("Broadcasting game update for game: %s", gameID)
+
+	gameObj, err := s.gameManager.GetGame(gameID)
+	if err != nil {
+		log.Printf("Error getting game %s: %v", gameID, err)
+		return
+	}
+
+	gameData, err := gameObj.ToJSON()
+	if err != nil {
+		log.Printf("Error converting game to JSON: %v", err)
+		return
+	}
+
+	var gameMap map[string]interface{}
+	json.Unmarshal(gameData, &gameMap)
+
+	// Broadcast to all clients in this game
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	clientCount := 0
+	for c := range s.clients {
+		if c.gameID == gameID {
+			clientCount++
+			c.sendMessage("game_update", gameMap)
+		}
+	}
+
+	log.Printf("Broadcast game_update to %d clients for game %s", clientCount, gameID)
 }

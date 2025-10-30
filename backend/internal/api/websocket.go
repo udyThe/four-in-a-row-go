@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -52,6 +53,12 @@ func (s *Server) registerClient(client *WSClient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clients[client] = true
+	// Log registration for debugging websocket issues
+	if client.conn != nil {
+		log.Printf("Registered client from %s", client.conn.RemoteAddr().String())
+	} else {
+		log.Printf("Registered client (no conn available yet): %v", client)
+	}
 }
 
 func (s *Server) unregisterClient(client *WSClient) {
@@ -169,10 +176,31 @@ func (client *WSClient) handleJoin(payload json.RawMessage) {
 		return
 	}
 
-	// Add player to matchmaking
-	player, gameObj := client.server.matchmaker.AddPlayer(data.Username)
+	// Add player to matchmaking. matchmaker now returns a matched flag to
+	// indicate whether a second player was found immediately. We defer
+	// calling JoinGame until after we set the WS client fields so the
+	// game update callback can find both clients.
+	player, gameObj, matched := client.server.matchmaker.AddPlayer(data.Username)
+
+	// Assign client identifiers immediately so the client is discoverable
+	// by server-level broadcasts.
 	client.playerID = player.ID
 	client.gameID = gameObj.ID
+
+	log.Printf("Client joined: player_id=%s game_id=%s remote=%s", client.playerID, client.gameID, client.conn.RemoteAddr().String())
+
+	// If a match was found, explicitly join the game now (this will emit
+	// events and trigger the onGameUpdate callback which will broadcast
+	// to connected clients). Doing this after setting client.playerID and
+	// client.gameID avoids the race where the callback fires before the
+	// WS client is ready to receive it.
+	if matched {
+		if err := client.server.gameManager.JoinGame(gameObj.ID, player); err != nil {
+			log.Printf("Error joining matched game: %v", err)
+			client.sendError("Failed to join matched game")
+			return
+		}
+	}
 
 	// Send player info
 	client.sendMessage("player_info", map[string]interface{}{

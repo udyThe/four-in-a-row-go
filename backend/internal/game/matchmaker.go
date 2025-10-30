@@ -41,7 +41,7 @@ func (mm *Matchmaker) Run() {
 }
 
 // AddPlayer adds a player to the matchmaking queue
-func (mm *Matchmaker) AddPlayer(username string) (*Player, *Game) {
+func (mm *Matchmaker) AddPlayer(username string) (*Player, *Game, bool) {
 	mm.mu.Lock()
 	defer mm.mu.Unlock()
 
@@ -67,15 +67,13 @@ func (mm *Matchmaker) AddPlayer(username string) (*Player, *Game) {
 			game = mm.gameManager.CreateGame(waitingRequest.Player)
 		}
 
-		game.AddPlayer2(player)
-		mm.gameManager.playerGames[player.ID] = game.ID
+		// We return a matched=true so the caller (API layer) can perform
+		// JoinGame after the WS client has set its playerID/gameID. This
+		// prevents a race where the game update callback fires before the
+		// client's fields are assigned and the client misses the update.
+		log.Printf("Matched players (deferred Join): %s vs %s", waitingRequest.Player.Username, player.Username)
 
-		log.Printf("Matched players: %s vs %s", waitingRequest.Player.Username, player.Username)
-
-		// Emit game started event
-		mm.gameManager.emitGameStartedEvent(game)
-
-		return player, game
+		return player, game, true
 	}
 
 	// No one waiting, add to queue
@@ -90,7 +88,7 @@ func (mm *Matchmaker) AddPlayer(username string) (*Player, *Game) {
 
 	log.Printf("Player %s added to matchmaking queue", username)
 
-	return player, game
+	return player, game, false
 }
 
 // processQueue checks for timeout and matches with bot

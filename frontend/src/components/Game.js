@@ -22,19 +22,9 @@ const Game = () => {
     wsService.on('error', handleError);
     wsService.on('reconnected', handleReconnected);
 
-    // Check for existing game session
-    const savedPlayerInfo = localStorage.getItem('playerInfo');
-    if (savedPlayerInfo) {
-      try {
-        const info = JSON.parse(savedPlayerInfo);
-        setPlayerInfo(info);
-        setStatus('connecting');
-        // Send reconnect - handleError will clear stale data if game not found
-        wsService.reconnect(info.player_id, info.game_id);
-      } catch (err) {
-        localStorage.removeItem('playerInfo');
-      }
-    }
+    // DISABLED RECONNECT: Clear any stale session data on load
+    // Reconnect was causing issues - always start fresh
+    localStorage.removeItem('playerInfo');
 
     return () => {
       wsService.disconnect();
